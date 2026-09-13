@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.net.http.HttpClient;
@@ -32,6 +33,8 @@ public class CoreClient {
 
     private static ClientHttpRequestFactory createSslRequestFactory() {
         try {
+            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true");
+
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, new TrustManager[]{new X509TrustManager() {
                 public void checkClientTrusted(X509Certificate[] chain, String authType) {}
@@ -39,8 +42,12 @@ public class CoreClient {
                 public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
             }}, new SecureRandom());
 
+            SSLParameters sslParameters = new SSLParameters();
+            sslParameters.setEndpointIdentificationAlgorithm("");
+
             HttpClient httpClient = HttpClient.newBuilder()
                     .sslContext(sslContext)
+                    .sslParameters(sslParameters)
                     .build();
 
             return new JdkClientHttpRequestFactory(httpClient);

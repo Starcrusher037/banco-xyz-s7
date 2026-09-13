@@ -201,3 +201,17 @@ Cada microservicio dispone de su propia consola OpenAPI Swagger interactiva:
 * **BFF Móvil:** [https://localhost:8081/swagger-ui.html](https://localhost:8081/swagger-ui.html)
 * **BFF Web:** [https://localhost:8082/swagger-ui.html](https://localhost:8082/swagger-ui.html)
 * **BFF Cajero ATM:** [https://localhost:8083/swagger-ui.html](https://localhost:8083/swagger-ui.html)
+
+---
+
+## 7. Alcance y Nivel de Ejecución del Proyecto
+
+Esta implementación académica e ilustrativa del patrón **Backend For Frontend (BFF)** establece ciertas consideraciones y alcances de diseño:
+
+### 1. Autenticación de Dispositivo vs. Usuario (Cajeros ATM)
+* **Token de Terminal (M2M):** El endpoint `/api/v1/cajero/auth/token` simula la autenticación máquina a máquina (Machine-to-Machine) del dispositivo físico ATM contra el backend para emitir un JWT de canal (`CAJERO_ATM`).
+
+### 2. Validación de PIN de Seguridad
+* **Validación en Capa BFF:** En el endpoint de giro (`POST /cuentas/{cuentaId}/retiro`), se aplica una validación estricta de **formato sintáctico** mediante expresión regular (`^\d{4}$`), garantizando que la solicitud contenga exactamente 4 dígitos numéricos antes de admitir el procesamiento del retiro.
+* **Desacoplamiento con el Core Bancario:** En este nivel de simulación, el PIN no se valida contra un hash o HSM (Hardware Security Module) en la base de datos del Core Legacy, ya que el modelo de datos se enfoca en la lógica transaccional, reglas de giro de efectivo (múltiplos de $5.000, topes máximos) y especialización de contratos por canal. "En un entorno productivo financiero, esta capa interactuaría con un switch transaccional y procesador criptográfico EMV/PIN Block".
+
