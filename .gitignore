@@ -31,3 +31,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Documents and Artifacts ###
+*.docx
+*.pdf
+*.zip
+*.py
+diagramas/
+~$*
+Banco_XYZ_Postman_Collection.json

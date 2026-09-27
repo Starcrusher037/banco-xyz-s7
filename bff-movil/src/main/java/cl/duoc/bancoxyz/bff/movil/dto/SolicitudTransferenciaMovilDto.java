@@ -1,49 +1,21 @@
 package cl.duoc.bancoxyz.bff.movil.dto;
 
-import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-@Schema(description = "Cuerpo de solicitud para realizar transferencias desde la app móvil")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class SolicitudTransferenciaMovilDto {
-
-    @Schema(description = "ID de la cuenta destinataria", example = "102", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotNull(message = "El ID de la cuenta de destino es obligatorio")
     private Long cuentaDestinoId;
 
-    @Schema(description = "Monto a transferir en pesos chilenos", example = "25000", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotNull(message = "El monto a transferir es obligatorio")
+    @Min(value = 1, message = "El monto mínimo de transferencia debe ser de al menos $1")
     private Long monto;
 
-    @Schema(description = "Comentario o asunto opcional de la transferencia", example = "Pago almuerzo")
     private String comentario;
-
-    public SolicitudTransferenciaMovilDto() {
-    }
-
-    public SolicitudTransferenciaMovilDto(Long cuentaDestinoId, Long monto, String comentario) {
-        this.cuentaDestinoId = cuentaDestinoId;
-        this.monto = monto;
-        this.comentario = comentario;
-    }
-
-    public Long getCuentaDestinoId() {
-        return cuentaDestinoId;
-    }
-
-    public void setCuentaDestinoId(Long cuentaDestinoId) {
-        this.cuentaDestinoId = cuentaDestinoId;
-    }
-
-    public Long getMonto() {
-        return monto;
-    }
-
-    public void setMonto(Long monto) {
-        this.monto = monto;
-    }
-
-    public String getComentario() {
-        return comentario;
-    }
-
-    public void setComentario(String comentario) {
-        this.comentario = comentario;
-    }
 }

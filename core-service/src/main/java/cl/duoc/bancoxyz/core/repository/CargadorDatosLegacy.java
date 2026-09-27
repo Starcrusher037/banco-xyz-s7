@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 
 @Component
 public class CargadorDatosLegacy {
@@ -28,12 +29,13 @@ public class CargadorDatosLegacy {
 
     @PostConstruct
     public void cargarDatos() {
-        log.info("Iniciando carga de datos legacy del Banco XYZ...");
+        log.info("[CORE] Iniciando carga de datos legacy del Banco XYZ...");
         cargarCuentas();
         cargarTransacciones();
         cargarCuentasAnuales();
-        log.info("Datos cargados correctamente. Total cuentas registradas: {}", bancoRepository.obtenerTodasLasCuentas().size());
+        log.info("[CORE] Datos cargados exitosamente. Total cuentas registradas: {}", bancoRepository.obtenerTodasLasCuentas().size());
     }
+
 
     private void cargarCuentas() {
         try {
@@ -75,14 +77,7 @@ public class CargadorDatosLegacy {
                         double tasaInteres = tipo.contains("ahorro") ? 3.8 : 0.5;
 
                         Cuenta cuenta = new Cuenta(
-                                cuentaId,
-                                nombre,
-                                saldo,
-                                edad,
-                                tipo,
-                                sobregiro,
-                                tasaInteres,
-                                "ACTIVA"
+                                cuentaId, nombre, saldo, edad, tipo, sobregiro, tasaInteres, "ACTIVA"
                         );
 
                         bancoRepository.guardarCuenta(cuenta);
@@ -90,7 +85,7 @@ public class CargadorDatosLegacy {
                 }
             }
         } catch (Exception e) {
-            log.error("Error al cargar intereses.csv: {}", e.getMessage());
+            log.error("[CORE] Error al cargar intereses.csv: {}", e.getMessage());
         }
     }
 
@@ -106,7 +101,7 @@ public class CargadorDatosLegacy {
                     if (datos.length < 4) continue;
                     try {
                         Long id = Long.parseLong(datos[0].trim());
-                        String fecha = normalizarFecha(datos[1].trim());
+                        LocalDate fecha = normalizarFecha(datos[1].trim());
 
                         long monto = 0L;
                         if (!datos[2].trim().isEmpty()) {
@@ -121,25 +116,11 @@ public class CargadorDatosLegacy {
                             tipo = (id % 2 == 0) ? "credito" : "debito";
                         }
 
-                        String descripcion;
-                        if ("credito".equalsIgnoreCase(tipo)) {
-                            String[] descCredito = {"Abono por transferencia", "Depósito de fondos", "Devolución de compra", "Pago de remuneración"};
-                            descripcion = descCredito[(int) (id % descCredito.length)];
-                        } else {
-                            String[] descDebito = {"Compra en comercio", "Pago de servicios básicos", "Giro en cajero automático", "Pago con tarjeta de débito"};
-                            descripcion = descDebito[(int) (id % descDebito.length)];
-                        }
-
+                        String descripcion = ("credito".equalsIgnoreCase(tipo)) ? "Abono bancario" : "Cargo en cuenta";
                         Long cuentaId = (id % 150) + 100;
 
                         Transaccion tx = new Transaccion(
-                                id,
-                                cuentaId,
-                                fecha,
-                                monto,
-                                tipo,
-                                descripcion,
-                                "LEGACY_BATCH"
+                                id, cuentaId, fecha, monto, tipo, descripcion, "LEGACY_BATCH"
                         );
 
                         bancoRepository.guardarTransaccion(tx);
@@ -147,21 +128,25 @@ public class CargadorDatosLegacy {
                 }
             }
         } catch (Exception e) {
-            log.error("Error al cargar transacciones.csv: {}", e.getMessage());
+            log.error("[CORE] Error al cargar transacciones.csv: {}", e.getMessage());
         }
     }
 
-    private String normalizarFecha(String fecha) {
-        if (fecha == null || fecha.trim().isEmpty()) return "2024-06-15";
+    private LocalDate normalizarFecha(String fecha) {
+        if (fecha == null || fecha.trim().isEmpty()) return LocalDate.of(2024, 6, 15);
         fecha = fecha.trim().replace("/", "-");
         if (fecha.matches("\\d{2}-\\d{2}-\\d{4}")) {
             String[] partes = fecha.split("-");
-            return partes[2] + "-" + partes[1] + "-" + partes[0];
+            fecha = partes[2] + "-" + partes[1] + "-" + partes[0];
         }
         if (fecha.matches("\\d{4}-13-\\d{2}")) {
             fecha = fecha.replace("-13-", "-12-");
         }
-        return fecha;
+        try {
+            return LocalDate.parse(fecha);
+        } catch (Exception e) {
+            return LocalDate.of(2024, 6, 15);
+        }
     }
 
     private void cargarCuentasAnuales() {
@@ -176,18 +161,14 @@ public class CargadorDatosLegacy {
                     if (datos.length < 5) continue;
                     try {
                         Long cuentaId = Long.parseLong(datos[0].trim());
-                        String fecha = normalizarFecha(datos[1].trim());
+                        LocalDate fecha = normalizarFecha(datos[1].trim());
                         String transaccion = datos[2].trim();
                         long monto = (long) Math.abs(Double.parseDouble(datos[3].trim()));
                         String descripcion = datos[4].trim();
-                        if (descripcion.isEmpty()) descripcion = "Movimiento histórico anual";
+                        if (descripcion.isEmpty()) descripcion = "Movimiento anual";
 
                         MovimientoAnual mov = new MovimientoAnual(
-                                cuentaId,
-                                fecha,
-                                transaccion,
-                                monto,
-                                descripcion
+                                cuentaId, fecha, transaccion, monto, descripcion
                         );
 
                         bancoRepository.guardarMovimientoAnual(mov);
@@ -195,7 +176,7 @@ public class CargadorDatosLegacy {
                 }
             }
         } catch (Exception e) {
-            log.error("Error al cargar cuentas_anuales.csv: {}", e.getMessage());
+            log.error("[CORE] Error al cargar cuentas_anuales.csv: {}", e.getMessage());
         }
     }
 }

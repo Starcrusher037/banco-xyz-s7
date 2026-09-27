@@ -10,8 +10,8 @@ import lombok.NoArgsConstructor;
 public class Cuenta {
     private Long cuentaId;
     private String nombreTitular;
-    private Long saldo;
-    private Integer edad;
+    private Long saldoContable;
+    private Integer edadTitular;
     private String tipoCuenta;
     private Long lineaSobregiro;
     private Double tasaInteresAnual;

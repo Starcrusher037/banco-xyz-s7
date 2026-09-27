@@ -2,13 +2,13 @@ package cl.duoc.bancoxyz.bff.movil.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
+import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
-import java.security.Key;
 import java.util.Date;
 
 @Component
@@ -20,26 +20,30 @@ public class JwtUtil {
     @Value("${bank.jwt.expiration-ms:86400000}")
     private long expirationMs;
 
-    private Key getSigningKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    private SecretKey signingKey;
+
+    @PostConstruct
+    public void init() {
+        this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
     public String generarToken(String username, String canal, Long cuentaId) {
+        Date now = new Date();
         return Jwts.builder()
-                .setSubject(username)
+                .subject(username)
                 .claim("canal", canal)
                 .claim("cuentaId", cuentaId)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .issuedAt(now)
+                .expiration(new Date(now.getTime() + expirationMs))
+                .signWith(signingKey)
                 .compact();
     }
 
     public Claims validarToken(String token) {
-        return Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
+        return Jwts.parser()
+                .verifyWith(signingKey)
                 .build()
-                .parseClaimsJws(token)
-                .getBody();
+                .parseSignedClaims(token)
+                .getPayload();
     }
 }

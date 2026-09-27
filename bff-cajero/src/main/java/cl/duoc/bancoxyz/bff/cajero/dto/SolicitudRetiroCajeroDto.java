@@ -1,49 +1,26 @@
 package cl.duoc.bancoxyz.bff.cajero.dto;
 
-import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-@Schema(description = "Solicitud de giro de dinero en cajero automático (ATM)")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class SolicitudRetiroCajeroDto {
 
-    @Schema(description = "Monto en pesos a retirar (múltiplo de $5.000)", example = "40000", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotNull(message = "El monto a retirar es obligatorio")
+    @Min(value = 5000, message = "El monto mínimo de retiro en cajero es de $5.000")
     private Long monto;
 
-    @Schema(description = "PIN de seguridad de 4 dígitos", example = "1234", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotBlank(message = "El PIN de seguridad de la tarjeta es obligatorio")
+    @Pattern(regexp = "^\\d{4}$", message = "El PIN debe constar exactamente de 4 dígitos numéricos")
     private String pin;
 
-    @Schema(description = "Identificador del terminal ATM", example = "ATM-SCL-01", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotBlank(message = "El identificador del terminal físico es obligatorio")
     private String terminalId;
-
-    public SolicitudRetiroCajeroDto() {
-    }
-
-    public SolicitudRetiroCajeroDto(Long monto, String pin, String terminalId) {
-        this.monto = monto;
-        this.pin = pin;
-        this.terminalId = terminalId;
-    }
-
-    public Long getMonto() {
-        return monto;
-    }
-
-    public void setMonto(Long monto) {
-        this.monto = monto;
-    }
-
-    public String getPin() {
-        return pin;
-    }
-
-    public void setPin(String pin) {
-        this.pin = pin;
-    }
-
-    public String getTerminalId() {
-        return terminalId;
-    }
-
-    public void setTerminalId(String terminalId) {
-        this.terminalId = terminalId;
-    }
 }

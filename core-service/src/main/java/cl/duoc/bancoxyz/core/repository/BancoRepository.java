@@ -16,7 +16,11 @@ public class BancoRepository {
     private final Map<Long, Cuenta> cuentas = new ConcurrentHashMap<>();
     private final List<Transaccion> transacciones = Collections.synchronizedList(new ArrayList<>());
     private final List<MovimientoAnual> movimientosAnuales = Collections.synchronizedList(new ArrayList<>());
-    private final AtomicLong correlativoTransaccion = new AtomicLong(5000);
+    private final AtomicLong correlativoTransaccion = new AtomicLong(50000L);
+
+    public Long generarSiguienteIdTransaccion() {
+        return correlativoTransaccion.incrementAndGet();
+    }
 
     public void guardarCuenta(Cuenta cuenta) {
         cuentas.put(cuenta.getCuentaId(), cuenta);
@@ -33,6 +37,8 @@ public class BancoRepository {
     public void guardarTransaccion(Transaccion transaccion) {
         if (transaccion.getId() == null) {
             transaccion.setId(correlativoTransaccion.incrementAndGet());
+        } else {
+            correlativoTransaccion.updateAndGet(actual -> Math.max(actual, transaccion.getId()));
         }
         transacciones.add(transaccion);
     }
