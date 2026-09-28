@@ -1,5 +1,5 @@
-# Banco XYZ - Arquitectura de Microservicios Distribuida con Spring Cloud. Implementación de Config Server, Eureka y BFFs resilientes
-### Asignatura: Desarrollo Backend III (PBY2203) - Experiencia 3 / Semana 6
+# Banco XYZ - Arquitectura de Microservicios Distribuida con Spring Cloud, Tolerancia a Fallos (Resilience4j) y Arquitectura de Eventos con JMS y Patrón SAGA
+### Asignatura: Desarrollo Backend III (PBY2203) - Experiencia 3 / Semanas 6 y 7
 **Grupo:** Grupo 3  
 **Integrantes:** Leonardo Bustamante - Carolina Delgado Sapunar  
 **Repositorio GitHub:** [https://github.com/Lybern/Exp3_S6_Grupo3](https://github.com/Lybern/Exp3_S6_Grupo3)
@@ -8,214 +8,271 @@
 
 ## 1. Descripción del proyecto
 
-Se implementó una arquitectura distribuida de microservicios autónomos y resilientes basada en **Spring Cloud 2025.1.2** y **Java 21** para el **Banco XYZ**. 
+Se diseñó e implementó una arquitectura distribuida de microservicios autónomos, tolerantes a fallos y orientada a eventos basada en **Spring Cloud 2025.1.2**, **Spring Boot 4.x**, **Apache ActiveMQ Artemis JMS** y **Java 21** para el **Banco XYZ**.
 
-El sistema desacopla la lógica de negocio central en un **Core Service** y los canales de interacción mediante el patrón **Backend for Frontend (BFF)** (`bff-movil`, `bff-web`, `bff-cajero`), orquestados por un **Servidor de Configuración Centralizada (Spring Cloud Config Server)** y un **Servidor de Descubrimiento (Netflix Eureka Server)** con soporte de **Balanceo de Carga del Lado del Cliente** y **Tolerancia a Fallos / Circuit Breakers y Retry (Resilience4j)**.
+El sistema desacopla la lógica de negocio central en un **Core Service** y los canales de interacción mediante el patrón **Backend for Frontend (BFF)** (`bff-movil`, `bff-web`, `bff-cajero`), orquestados por un **Servidor de Configuración Centralizada (Spring Cloud Config Server)** y un **Servidor de Descubrimiento (Netflix Eureka Server)** con soporte de:
+* **Balanceo de Carga del Lado del Cliente** (@LoadBalanced RestTemplate + Eureka).
+* **Tolerancia a Fallos y Resiliencia:** Circuit Breakers, Retry con retroceso y Fallbacks mediante **Resilience4j**.
+* **Arquitectura Orientada a Eventos (EDA) y Patrón SAGA:** Procesamiento asíncrono y desacoplado de transferencias interbancarias mediante **JMS (ActiveMQ Artemis)** con transacciones compensatorias automáticas (Rollback semántico) y bitácora inmutable de auditoría.
 
 ```
-                                  +-----------------------+
-                                  |     CONFIG SERVER     |
-                                  |    (Puerto: 8888)     |
-                                  | * Repositorio Nativo  |
-                                  | * config-repo/*.props |
-                                  +-----------+-----------+
-                                              |
-                   +--------------------------+--------------------------+
-                   |                          |                          |
-                   v                          v                          v
-        +--------------------+     +--------------------+     +--------------------+
-        |  DISCOVERY SERVER  |     |    CORE SERVICE    |     |   BFFs (MOVIL/WEB/ |
-        |  (Eureka: 8761)    |<----+   (Puerto: 8080)   |     |    CAJERO ATM)     |
-        | * Registro Activo  |     | * Cuentas y Saldos |     | * Canales HTTPS    |
-        | * Heartbeat / Info |     | * Persistencia CSV |     | * JWT + Delegated  |
-        +---------^----------+     +----------^---------+     +---------+----------+
-                  |                           |                         |
-                  +---------------------------+-------------------------+
-                                              |
-                                              | @LoadBalanced RestTemplate + Eureka
-                                              | Circuit Breaker, Retry & Fallback (Resilience4j)
-                                              +-------------------------+
+                              +-----------------------+
+                              |     CONFIG SERVER     |
+                              |    (Puerto: 8888)     |
+                              | * Repositorio Nativo  |
+                              | * config-repo/*.props |
+                              +-----------+-----------+
+                                          |
+               +--------------------------+--------------------------+
+               |                          |                          |
+               v                          v                          v
+    +--------------------+     +--------------------+     +--------------------+
+    |  DISCOVERY SERVER  |     |    CORE SERVICE    |     |   BFFs (MOVIL/WEB/ |
+    |  (Eureka: 8761)    |<----+   (Puerto: 8080)   |     |    CAJERO ATM)     |
+    | * Registro Activo  |     | * Cuentas y Saldos |     | * Canales HTTPS    |
+    | * Heartbeat / Info |     | * Persistencia CSV |     | * JWT + Delegated  |
+    +---------^----------+     +----------^---------+     +---------+----------+
+              |                           |                         |
+              +---------------------------+-------------------------+
+                                          |
+                                          | @LoadBalanced RestTemplate + Eureka
+                                          | Circuit Breaker, Retry & Fallback (Resilience4j)
+                                          +-------------------------+
+
+                     === ARQUITECTURA DE EVENTOS Y SAGA (JMS) ===
+                     
+       [BFF Móvil / API] ----(POST /transferencia)----> [Saga Orchestrator]
+                                                                |
+                                             Paso 1: Débito atómico en Origen
+                                                                |
+                          +-------------------------------------+
+                          |
+                          v (Mensajería Asíncrona JMS)
+          +-------------------------------+
+          |  ActiveMQ Artemis JMS Broker  |
+          |  (Embebido en Core Service)   |
+          +---------------+---------------+
+                          |
+     +--------------------+--------------------+
+     |                                         |
+     v cola: banco.saga.transferencias         v cola: banco.saga.compensaciones
+[Saga Consumer: Abono Destino]           [Saga Consumer: Compensación/Rollback]
+     |                                         |
+     +-- Éxito: Acredita saldo y completa      +-- Fallo en destino: Reversa débito
+     |                                             y restituye saldo a origen
+     v cola: banco.eventos.auditoria
+[Bitácora de Auditoría Inmutable]
 ```
 
 ---
 
-## 2. Arquitectura de microservicios y Componentes
+## 2. Arquitectura de Eventos: Patrón SAGA y Mensajería JMS 
 
-| Microservicio / Servidor | Puerto | Protocolo / Seguridad | Responsabilidad Principal |
-| :--- | :---: | :---: | :--- |
-| **`config-server`** | `8888` | HTTP (Basic Auth: `admin`/`gato`) | Servidor Spring Cloud Config con perfil nativo. Expone las propiedades externalizadas de todos los microservicios desde `config-repo/`. |
-| **`discovery-server`** | `8761` | HTTP (Basic Auth: `eureka`/`eureka2026`) | Servidor Netflix Eureka para registro y descubrimiento dinámico de instancias en tiempo de ejecución. |
-| **`core-service`** | `8080` | HTTP (Service Token JWT) | Microservicio transaccional del Core Bancario. Maneja persistencia de cuentas, movimientos y tasas (`intereses.csv`, `transacciones.csv`, `cuentas_anuales.csv`). |
-| **`bff-movil`** | `8443` | HTTPS / PKCS12 + JWT (`aud: MOVIL`) | BFF optimizado para dispositivos móviles con respuestas ultraligeras (Top 3 movimientos, transferencias). |
-| **`bff-web`** | `8444` | HTTPS / PKCS12 + JWT (`aud: WEB`) | BFF para navegadores web. Dashboard consolidado, desglose anual con tasas de interés y cabeceras de protección OWASP (CSP, HSTS, `X-Frame-Options: DENY`). |
-| **`bff-cajero`** | `8445` | HTTPS / PKCS12 + JWT (`aud: ATM`) | BFF para cajeros automáticos (ATM). Giros en múltiplos de $5.000, validación de PIN de 4 dígitos y límites de dispensación configurados vía Config Server. |
+### 2.1 Justificación del Patrón SAGA frente a 2PC (Two-Phase Commit)
+En arquitecturas distribuidas de microservicios en la nube, el uso de transacciones ACID distribuidas clásicas (2PC / XA) introduce bloqueos pesados y cuellos de botella que destruyen la escalabilidad y disponibilidad del sistema (Teorema CAP). 
+
+Por ello, se implementó el **Patrón SAGA** mediante mensajería asíncrona JMS:
+1. **Desacoplamiento Temporal:** La solicitud de transferencia no mantiene bloqueada la conexión HTTP del cliente mientras se procesa la acreditación en la cuenta destino.
+2. **Consistencia Eventual:** Cada paso de la transacción realiza un cambio local en su estado y emite un evento al broker de mensajería.
+3. **Transacciones Compensatorias (Rollback Semántico):** Si el abono en la cuenta de destino falla (por cuenta inexistente, estado bloqueado o fallo de sistema), el consumidor detecta la anomalía y despacha un evento compensatorio (`SagaCompensacionEvent`) que revierte automáticamente los fondos al titular de la cuenta origen.
+
+### 2.2 Tópicos / Colas de Mensajería JMS Implementadas
+
+| Nombre de la Cola JMS | Tipo | Mensaje / Evento | Propósito |
+| :--- | :---: | :--- | :--- |
+| **`banco.saga.transferencias`** | Point-to-Point (Queue) | `SagaTransferenciaEvent` | Despacho asíncrono para ejecutar el Paso 2 (Abono en cuenta destino) de forma desacoplada. |
+| **`banco.saga.compensaciones`** | Point-to-Point (Queue) | `SagaCompensacionEvent` | Disparo de la transacción compensatoria ante excepciones en destino (restitución íntegra del saldo original). |
+| **`banco.eventos.auditoria`** | Point-to-Point (Queue) | `AuditoriaEventoDto` | Bitácora inmutable de eventos transaccionales (`TRANSFERENCIA_INICIADA`, `TRANSFERENCIA_EXITOSA`, `COMPENSACION_SOLICITADA`, `COMPENSACION_FINALIZADA`). |
+
+### 2.3 Máquina de Estados de la SAGA
+
+* **`INICIADA`:** Solicitud recibida y registrada por el orquestador.
+* **`DEBITO_COMPLETADO`:** Paso 1 finalizado (fondos debitados en origen; evento emitido al broker JMS).
+* **`COMPLETADA`:** Paso 2 ejecutado con éxito por el consumidor JMS (fondos acreditados en destino).
+* **`COMPENSADA`:** Ocurrió un error en el destino y la transacción compensatoria revirtió exitosamente el débito, devolviendo el saldo al origen.
+* **`FALLIDA`:** La operación fue rechazada en el paso 1 (por ejemplo, fondos insuficientes).
 
 ---
 
-## 3. Matriz de Credenciales y Autenticación
+## 3. Tolerancia a Fallos con Resilience4j (Semana 6 y 7)
+
+La resiliencia se aplica en dos niveles críticos del ecosistema:
+
+### A. Nivel Canales / Clientes BFF (`bff-movil`, `bff-web`, `bff-cajero`):
+* **Circuit Breaker (`coreServiceCB`):**
+  * `slidingWindowSize: 10`
+  * `failureRateThreshold: 50%`
+  * `waitDurationInOpenState: 10.000 ms`
+  * `permittedNumberOfCallsInHalfOpenState: 3`
+* **Retry:** 3 intentos automáticos con intervalo de 1.000 ms ante fallas de red.
+* **Fallback:** Respuestas contingentes en modo degradado (`DEGRADADO_FALLBACK`).
+
+### B. Nivel Mensajería y Core Service (`core-service`):
+* **Circuit Breaker & Retry en Publicador JMS (`sagaJmsCB`):**
+  * Protege las operaciones de publicación hacia el broker ActiveMQ Artemis. Si el broker no está disponible, el fallback intercepta la falla antes de corromper la transacción local.
+* **Circuit Breaker & Retry en Consumidor JMS (`sagaConsumerCB`):**
+  * Protege la ejecución del Paso 2 (abono en destino). Si se agotan los reintentos o el circuito se abre, se activa de forma garantizada el fallback de compensación enviando el mensaje a `banco.saga.compensaciones`.
+
+---
+
+## 4. Arquitectura de Microservicios y Componentes
+
+### 4.1 Componentes Troncales Evaluados (Alcance Principal)
+Los siguientes componentes constituyen el núcleo del sistema evaluado en la Experiencia 3 (Semana 7). El sistema es 100% funcional y evaluable únicamente con estos tres microservicios:
+
+| Microservicio / Servidor | Puerto | Protocolo / Seguridad | Responsabilidad Principal | Estado en Evaluación |
+| :--- | :---: | :--- | :--- | :---: |
+| **`config-server`** | `8888` | HTTP (Basic Auth: `admin`/`gato`) | Servidor Spring Cloud Config con perfil nativo. Expone las propiedades centralizadas de todos los microservicios desde `config-repo/`. | **Obligatorio (Core)** |
+| **`discovery-server`** | `8761` | HTTP (Basic Auth: `eureka`/`eureka2026`) | Servidor Netflix Eureka para registro y descubrimiento dinámico de instancias en tiempo de ejecución. | **Obligatorio (Core)** |
+| **`core-service`** | `8080` | HTTP (Service Token JWT / Endpoints SAGA) | Core Bancario. Persistencia CSV, motor SAGA orquestado, broker JMS ActiveMQ Artemis embebido, colas transaccionales y Actuator. | **Obligatorio (Core)** |
+
+### 4.2 Componentes Cliente / Arnés de Pruebas E2E (Desacoplados y Opcionales)
+Los siguientes módulos actúan como clientes perimetrales especializados por canal. Están desacoplados del Core y no son requeridos para evaluar la lógica bancaria:
+
+| Módulo Cliente | Puerto | Protocolo / Seguridad | Propósito como Cliente / Arnés de Prueba | Estado en Evaluación |
+| :--- | :---: | :--- | :--- | :---: |
+| **`bff-movil`** | `8443` | HTTPS / PKCS12 + JWT (`aud: MOVIL`) | Cliente móvil: valida payloads livianos, invoca transferencias SAGA y prueba Circuit Breakers en el consumidor. | **Opcional (Cliente)** |
+| **`bff-web`** | `8444` | HTTPS / PKCS12 + JWT (`aud: WEB`) | Cliente web: consume vistas consolidadas anuales y prueba cabeceras seguras OWASP. | **Opcional (Cliente)** |
+| **`bff-cajero`** | `8445` | HTTPS / PKCS12 + JWT (`aud: ATM`) | Terminal ATM: prueba límites de giro (\$200.000) y múltiplos de dispensación (\$5.000). | **Opcional (Cliente)** |
+
+---
+
+### 4.3 Nota de Alcance Arquitectónico: Justificación Técnica de los BFFs
+En consideración directa a la retroalimentación docente sobre mantener el foco en los componentes troncales solicitados:
+
+1. **Autonomía Total del Core Bancario (Foco Evaluado):**  
+   El `core-service` es completamente autosuficiente e independiente. Contiene la orquestación SAGA, la mensajería asíncrona JMS con ActiveMQ Artemis, la persistencia, las reglas transaccionales y su propia interfaz interactiva OpenAPI/Swagger (`http://localhost:8080/swagger-ui/index.html`). No requiere en lo absoluto de los BFF para su despliegue, ejecución ni evaluación.
+
+2. **Rol de los BFFs como Arnés de Pruebas de Resiliencia en el Consumidor (Resilience4j + Eureka):**  
+   Patrones fundamentales como `@CircuitBreaker`, `@Retry` y el balanceo `@LoadBalanced` de Spring Cloud actúan formalmente en el **lado del cliente/consumidor** de una llamada de red remota. Para validar empíricamente que una caída o saturación del Core dispara el Circuit Breaker y activa respuestas contingentes (`DEGRADADO_FALLBACK`), se mantuvieron los BFFs como clientes reales de prueba, permitiendo observar el comportamiento distribuido en vivo sin limitarse a pruebas unitarias con mocks.
+
+3. **Seguridad Perimetral y Separación de Canales (Modelo Zero Trust):**  
+   En la arquitectura bancaria, el Core nunca se expone directamente a los dispositivos finales. Los BFFs se diseñaron como la frontera perimetral (Edge) que absorbe la autenticación de usuarios finales (Móvil, Web, ATM) y se comunica con el Core exclusivamente mediante *Service Tokens* internos, protegiendo las entidades de dominio y aplicando reglas específicas de cada canal (múltiplos de giro en cajero, resúmenes optimizados en móvil).
+
+> **Para la evaluación de esta entrega:** El docente puede interactuar y validar el 100% de los criterios exigidos (SAGA, JMS, Config Server, Eureka y Resiliencia) directamente sobre el `core-service`, considerando los BFFs como artefactos complementarios para demostración de llamadas distribuidas.
+
+---
+
+## 5. Matriz de Credenciales y Autenticación
 
 | Componente | Usuario | Contraseña | Rol / Audiencia | Tipo de Autenticación |
-| :--- | :--- | :--- | :--- | :--- |
-| ⚙️ **Config Server** | `admin` | `gato` | `ROLE_ADMIN` | HTTP Basic Auth |
-| 🔍 **Discovery Server** | `eureka` | `eureka2026` | `ROLE_ADMIN` | HTTP Basic Auth |
-| 📱 **BFF Móvil** | `usuario_movil` | `movil123` | `ROLE_MOVIL` / `aud: MOVIL` | JWT Bearer Token |
-| 🌐 **BFF Web** | `usuario_web` | `web123` | `ROLE_WEB` / `aud: WEB` | JWT Bearer Token |
-| 🏧 **BFF Cajero ATM** | `operador_atm` | `atm123` | `ROLE_ATM` / `aud: ATM` | JWT Bearer Token |
-| 🏧 **BFF Cajero ATM (Alt)**| `usuario_cajero` | `cajero123` | `ROLE_ATM` / `aud: ATM` | JWT Bearer Token |
-| 🏢 **Core Bancario (Interno)**| `bff-*-client` | *Delegated Token* | `SERVICE_TOKEN` / `aud: core-bancario` | Service JWT firmado compartido |
-
-### Aislamiento de Autorización por Canal (Seguridad Diferenciada)
-
-Cada microservicio BFF aplica control de acceso de autenticación de forma independiente mediante Spring Security y JJWT:
-* **Validación de Audiencia (`aud`) y Rol:** Cada BFF valida criptográficamente que el token recibido corresponda estrictamente a su propio canal (`MOVIL`, `WEB`, `ATM`) y que el usuario posea la autoridad correspondiente (`ROLE_MOVIL`, `ROLE_WEB`, `ROLE_ATM`).
-* **Protección Cruzada (Cross-Channel Isolation):** Un token emitido para un canal específico (ej: `bff-movil`) es rechazado de inmediato con **`HTTP 403 Forbidden`** si se intenta utilizar para acceder a los endpoints de otro canal (`bff-web` o `bff-cajero`).
-* **Bloqueo No Autenticado:** Cualquier consulta a rutas protegidas sin cabecera `Authorization: Bearer <token>` es bloqueada con **`HTTP 403 Forbidden`**.
-* **Tokens de Servicio Delegados:** La comunicación interna entre los BFFs y el `core-service` utiliza tokens firmados independientes con audiencia `core-bancario` y expiración corta, desacoplando los tokens de los clientes finales del backend central.
+| :--- | :---: | :---: | :---: | :--- |
+| **Config Server** | `admin` | `gato` | `ROLE_ADMIN` | HTTP Basic Auth |
+| **Discovery Server** | `eureka` | `eureka2026` | `ROLE_ADMIN` | HTTP Basic Auth |
+| **BFF Móvil** | `usuario_movil` | `movil123` | `ROLE_MOVIL` / `aud: MOVIL` | JWT Bearer Token |
+| **BFF Web** | `usuario_web` | `web123` | `ROLE_WEB` / `aud: WEB` | JWT Bearer Token |
+| **BFF Cajero ATM** | `operador_atm` | `atm123` | `ROLE_ATM` / `aud: ATM` | JWT Bearer Token |
+| **Core Bancario (Interno)**| `bff-*-client` | *Delegated Token* | `SERVICE_TOKEN` / `aud: core-bancario` | Service JWT firmado compartido |
 
 ---
 
-## 4. Resiliencia y Tolerancia a Fallos (Resilience4j)
-
-Cada BFF (`bff-movil`, `bff-web`, `bff-cajero`) cuenta con una instancia combinada de **Circuit Breaker** y **Retry** (`coreServiceCB`) configurada en el repositorio central de configuración:
-
-* **Circuit Breaker:**
-  * **Ventana Deslizante (`slidingWindowSize`):** 10 llamadas.
-  * **Umbral de Fallos (`failureRateThreshold`):** 50%.
-  * **Tiempo en Estado Abierto (`waitDurationInOpenState`):** 10.000 ms (10 segundos).
-  * **Llamadas de Prueba en Half-Open (`permittedNumberOfCallsInHalfOpenState`):** 3 llamadas.
-* **Retry (Reintentos automáticos ante fallas transitorias):**
-  * **Intentos Máximos (`maxAttempts`):** 3 llamadas.
-  * **Tiempo de Espera (`waitDuration`):** 1.000 ms (1 segundo) entre intentos.
-* **Comportamiento Degradado (Fallback):**
-  * Si el `core-service` no está disponible o el circuito está **OPEN**, los BFFs devuelven una respuesta estructurada con estado `"DEGRADADO_FALLBACK"` o mensaje de contingencia sin propagar errores `500 Internal Server Error`.
-  * La dispensación física en cajeros rechaza transacciones no confirmadas con `503 Service Unavailable`, manteniendo la integridad monetaria.
-
----
-
-## 5. Instrucciones de Compilación y Puesta en Marcha
+## 6. Instrucciones de Compilación y Puesta en Marcha
 
 ### Prerrequisitos:
 * **Java:** OpenJDK 21 (LTS) o superior.
-* **Maven:** Incluido a través de `./mvnw` / `mvnw.cmd`.
+* **Maven:** Incluido a través del wrapper `./mvnw` / `mvnw.cmd`.
 
-### Paso 1: Compilar todo el ecosistema
+### Compilación y Ejecución de Pruebas Automatizadas de SAGA y Resiliencia
+Para compilar y correr las pruebas del ecosistema, ejecutar:
 ```bash
-./mvnw clean test-compile
+./mvnw -f core-service/pom.xml test
 ```
+*Resultado:* Se ejecutan 6 pruebas automatizadas que validan:
+1. Flujo completo SAGA exitoso con acreditación asíncrona JMS y actualización a estado `COMPLETADA`.
+2. Flujo de compensación SAGA automático (Rollback semántico al fallar la cuenta de destino, restituyendo el 100% de los fondos a origen y pasando a estado `COMPENSADA`).
+3. Rechazo atómico de operaciones sin saldo suficiente.
+4. Carga y consistencia de datos contables legacy.
 
-### Paso 2: Orden de Inicio de los Microservicios
+### Orden de Inicio de los Microservicios
 
-Es fundamental iniciar los componentes en el siguiente orden secuencial:
+#### A. Inicio Troncal Obligatorio (Evaluación del Ecosistema Core):
+Solo se requieren estas 3 terminales para evaluar la totalidad de los criterios académicos (SAGA, JMS, Eureka, Config Server y Resiliencia):
 
 1. **Terminal 1 - Iniciar Config Server (Puerto 8888):**
    ```bash
-   ./mvnw -pl config-server spring-boot:run
+   ./mvnw -f config-server/pom.xml spring-boot:run
    ```
 
 2. **Terminal 2 - Iniciar Discovery Server Eureka (Puerto 8761):**
    ```bash
-   ./mvnw -pl discovery-server spring-boot:run
+   ./mvnw -f discovery-server/pom.xml spring-boot:run
    ```
-   *Dashboard Eureka:* [http://localhost:8761](http://localhost:8761) (Credenciales: `eureka` / `eureka2026`)
+   *Dashboard Eureka:* [http://localhost:8761](http://localhost:8761) (`eureka` / `eureka2026`)
 
-3. **Terminal 3 - Iniciar Core Service (Puerto 8080):**
+3. **Terminal 3 - Iniciar Core Service con Broker JMS (Puerto 8080):**
    ```bash
-   ./mvnw -pl core-service spring-boot:run
+   ./mvnw -f core-service/pom.xml spring-boot:run
    ```
+   *Swagger UI directo del Core:* [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
 
-4. **Terminal 4 - Iniciar BFF Móvil (Puerto HTTPS 8443):**
+#### B. Inicio de Clientes BFF (Opcional - Arnés de Pruebas de Canal):
+4. **Terminal 4 - Iniciar BFF Móvil / Web / Cajero (Solo si se desean probar canales cliente externos):**
    ```bash
-   ./mvnw -pl bff-movil spring-boot:run
-   ```
-
-5. **Terminal 5 - Iniciar BFF Web (Puerto HTTPS 8444):**
-   ```bash
-   ./mvnw -pl bff-web spring-boot:run
-   ```
-
-6. **Terminal 6 - Iniciar BFF Cajero ATM (Puerto HTTPS 8445):**
-   ```bash
-   ./mvnw -pl bff-cajero spring-boot:run
+   ./mvnw -f ../bff/bff-movil/pom.xml spring-boot:run
    ```
 
 ---
 
-## 6. Pruebas y Verificación de Endpoints en Postman
+## 7. Matriz de Endpoints y Verificación en Postman
 
-Las pruebas de integración y verificación funcional se realizan a través de **Postman** (y navegador web para dashboards), consumiendo las APIs REST expuestas por cada microservicio.
-
-### A. Matriz de Endpoints para Pruebas
-
-| Canal / Servicio | Método | Endpoint | Descripción | Autenticación en Postman |
+### A. Endpoints del Core Bancario (Evaluación Directa y Principal)
+| Servicio | Método | Endpoint | Descripción | Autenticación en Postman |
 | :--- | :---: | :--- | :--- | :--- |
 | **Config Server** | `GET` | `/core-service/default` | Obtener propiedades centralizadas del microservicio | Basic Auth (`admin`/`gato`) |
 | **Discovery Server** | `GET` | `/eureka/apps` | Consultar microservicios registrados en Eureka | Basic Auth (`eureka`/`eureka2026`) |
-| **BFF Móvil** | `POST` | `/api/auth/login` | Autenticación de usuario móvil y emisión de JWT | Body JSON (Pública) |
-| **BFF Móvil** | `GET` | `/api/v1/movil/cuentas/{id}` | Resumen ligero de cuenta y movimientos | Bearer Token (`aud: MOVIL`) |
-| **BFF Móvil** | `POST` | `/api/v1/movil/cuentas/{id}/transferencia` | Transferencia electrónica de fondos | Bearer Token (`aud: MOVIL`) |
-| **BFF Web** | `POST` | `/api/auth/login` | Autenticación de usuario web y emisión de JWT | Body JSON (Pública) |
-| **BFF Web** | `GET` | `/api/v1/web/cuentas/{id}` | Detalle financiero anual con cálculo de intereses | Bearer Token (`aud: WEB`) |
-| **BFF Cajero ATM** | `POST` | `/api/auth/login` | Autenticación de terminal cajero y emisión de JWT | Body JSON (Pública) |
-| **BFF Cajero ATM** | `GET` | `/api/v1/cajero/cuentas/{id}/saldo` | Consulta de saldo disponible para dispensación | Bearer Token (`aud: ATM`) |
-| **BFF Cajero ATM** | `POST` | `/api/v1/cajero/cuentas/{id}/retiro` | Retiro de efectivo (múltiplos de $5.000) | Bearer Token (`aud: ATM`) |
+| **Core Service** | `POST` | `/api/core/operaciones/transferencia` | Orquestar transferencia SAGA asíncrona JMS directa | Service Token (`aud: core-bancario`) |
+| **Core Service** | `GET` | `/api/core/saga/transacciones` | Listar todas las transacciones SAGA y sus estados | Service Token (`aud: core-bancario`) |
+| **Core Service** | `GET` | `/api/core/saga/transacciones/{sagaId}` | Consultar detalle de una transacción SAGA por ID | Service Token (`aud: core-bancario`) |
+| **Core Service** | `GET` | `/api/core/saga/auditoria` | Listar eventos de auditoría emitidos por JMS | Service Token (`aud: core-bancario`) |
+| **Core Actuator** | `GET` | `/actuator/health` | Estado de salud, Circuit Breakers y Broker JMS embebido | Sin autenticación |
+
+### B. Endpoints de Canales BFF (Opcional - Consumo Perimetral)
+| Canal | Método | Endpoint | Descripción | Autenticación en Postman |
+| :--- | :---: | :--- | :--- | :--- |
+| **BFF Móvil** | `POST` | `/api/auth/login` | Login y emisión de JWT para canal móvil | Body JSON (`usuario_movil` / `movil123`) |
+| **BFF Móvil** | `POST` | `/api/v1/movil/cuentas/{id}/transferencia` | Iniciar transferencia electrónica delegada a SAGA | Bearer Token (`aud: MOVIL`) |
 
 ---
 
-### B. Especificación de Pruebas Paso a Paso en Postman
+## 8. Verificación Paso a Paso del Patrón SAGA en Postman
 
-#### 1. Verificación de Infraestructura (Config Server y Eureka)
-* **Config Server (Puerto 8888):**
-  * **Método:** `GET` | **URL:** `http://localhost:8888/core-service/default` (o `/bff-movil/default`)
-  * **Pestaña Authorization:** Type *Basic Auth* (Username / Password).
-  * **Respuesta Esperada (`200 OK`):** Retorna el JSON con las fuentes de configuración cargadas dinámicamente desde `config-repo/`.
-* **Discovery Server (Puerto 8761):**
-  * **Navegador Web:** Ingresar a [http://localhost:8761](http://localhost:8761) con credenciales.
-  * **Verificación Visual:** El panel de Eureka lista las 4 aplicaciones registradas en estado `UP` (`BFF-MOVIL`, `BFF-WEB`, `BFF-CAJERO`, `CORE-SERVICE`).
+### Prueba 1: Transferencia Exitosa (SAGA Happy Path)
+1. **Petición:** `POST http://localhost:8080/api/core/operaciones/transferencia` (Directo al Core Service con Service Token) o vía `POST https://localhost:8443/api/v1/movil/cuentas/106/transferencia` (BFF Móvil).
+2. **Body:**
+   ```json
+   {
+     "cuentaDestinoId": 107,
+     "monto": 10000,
+     "comentario": "Transferencia SAGA exitosa"
+   }
+   ```
+3. **Respuesta Esperada (`200 OK`):**
+   ```json
+   {
+     "mensaje": "Transferencia iniciada exitosamente bajo arquitectura SAGA asíncrona JMS",
+     "sagaId": "uuid-generado",
+     "estado": "DEBITO_COMPLETADO",
+     "cuentaOrigenId": 106,
+     "cuentaDestinoId": 107,
+     "monto": 10000
+   }
+   ```
+4. **Verificación de Consistencia:** Consultar `GET /api/core/saga/transacciones/{sagaId}`. El estado habrá transitado asíncronamente a **`COMPLETADA`** tras ser procesado por el broker JMS.
 
-#### 2. Autenticación de Clientes en Postman (Login)
-* **Método:** `POST`
-* **URL:** `https://localhost:8443/api/auth/login` *(o 8444 para Web / 8445 para Cajero)*
-* **Pestaña Body:** Seleccionar `raw` -> `JSON`:
-  ```json
-  {
-    "username": "",
-    "password": ""
-  }
-  ```
-* **Respuesta Esperada (`200 OK`):** Retorna el token JWT emitido, detallando el canal (`MOVIL`), rol (`ROLE_MOVIL`) y tiempo de expiración. Copiar el valor del campo `token`.
-
-#### 3. Consumo de Negocio en Operación Normal
-* **Método:** `GET`
-* **URL:** `https://localhost:8443/api/v1/movil/cuentas/106`
-* **Pestaña Headers:**
-  * Key: `Authorization`
-  * Value: `Bearer <TOKEN_JWT>`
-* **Respuesta Esperada (`200 OK`):** El BFF Móvil descubre dinámicamente a `http://core-service` mediante Eureka y retorna los datos contables del titular (`John Doe`), saldo disponible y los 3 últimos movimientos históricos.
-
-#### 4. Prueba de Resiliencia y Tolerancia a Fallos (Fallback)
-* **Escenario:** Detener el microservicio central `core-service` en la terminal.
-* **Método:** `GET`
-* **URL:** `https://localhost:8443/api/v1/movil/cuentas/106`
-* **Pestaña Headers:** `Authorization: Bearer <TOKEN_JWT>`
-* **Respuesta Esperada (`200 OK` - Modo Degradado):** El Circuit Breaker (`coreServiceCB`) de Resilience4j intercepta la caída del servicio central y deriva la ejecución al método fallback sin lanzar error 500:
-  ```json
-  {
-    "cuentaId": 106,
-    "nombreTitular": "Usuario Móvil (Modo Degradado)",
-    "tipoCuenta": "ahorro",
-    "saldoDisponible": 0,
-    "ultimosMovimientos": [],
-    "canal": "MOVIL"
-  }
-  ```
+### Prueba 2: Fallo en Destino y Compensación Automática (Rollback)
+1. **Petición:** Transferir fondos hacia una cuenta destino no existente (ej: `999999`).
+2. **Resultado:** 
+   * Paso 1 debita transitoriamente la cuenta 106.
+   * El consumidor JMS detecta el error en destino (`Cuenta destino no existe`).
+   * Se dispara el evento en `banco.saga.compensaciones`.
+   * El consumidor de compensación devuelve los fondos a la cuenta 106.
+   * La transacción finaliza en estado **`COMPENSADA`**, manteniendo intacto el balance contable inicial del usuario.
+3. **Verificación en Auditoría:** Consultar `GET /api/core/saga/auditoria` para inspeccionar la bitácora con `COMPENSACION_SOLICITADA` y `COMPENSACION_FINALIZADA`.
 
 ---
 
-## 7. Documentación Swagger / OpenAPI
+## 9. Documentación Swagger / OpenAPI y Monitoreo Actuator
 
-Cada microservicio expone su interfaz Swagger UI para exploración interactiva:
-* 📱 **BFF Móvil:** `https://localhost:8443/swagger-ui/index.html`
-* 🌐 **BFF Web:** `https://localhost:8444/swagger-ui/index.html`
-* 🏧 **BFF Cajero:** `https://localhost:8445/swagger-ui/index.html`
-* 🏢 **Core Service:** `http://localhost:8080/swagger-ui/index.html`
-* 🩺 **Actuator Health & Metrics:** `https://localhost:8443/actuator/health`, `https://localhost:8444/actuator/health`, `https://localhost:8445/actuator/health`
+* **Core Service (SAGA & Swagger UI):** `http://localhost:8080/swagger-ui/index.html`
+* **BFF Móvil:** `https://localhost:8443/swagger-ui/index.html`
+* **Actuator Health & Metrics:** `http://localhost:8080/actuator/health`, `https://localhost:8443/actuator/health`

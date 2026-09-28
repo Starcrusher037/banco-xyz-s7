@@ -28,8 +28,8 @@ public class ServiceTokenFilter extends OncePerRequestFilter {
 
         String path = request.getRequestURI();
 
-        // Endpoints publicos Swagger
-        if (path.startsWith("/v3/api-docs") || path.startsWith("/swagger-ui") || path.equals("/swagger-ui.html")) {
+        // Endpoints publicos Swagger y Actuator
+        if (path.startsWith("/v3/api-docs") || path.startsWith("/swagger-ui") || path.equals("/swagger-ui.html") || path.startsWith("/actuator")) {
             filterChain.doFilter(request, response);
             return;
         }

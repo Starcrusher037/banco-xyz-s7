@@ -18,9 +18,12 @@ import java.util.Map;
 public class CoreController {
 
     private final BancoService bancoService;
+    private final cl.duoc.bancoxyz.core.saga.service.SagaTransferenciaOrchestrator sagaOrchestrator;
 
-    public CoreController(BancoService bancoService) {
+    public CoreController(BancoService bancoService,
+                          cl.duoc.bancoxyz.core.saga.service.SagaTransferenciaOrchestrator sagaOrchestrator) {
         this.bancoService = bancoService;
+        this.sagaOrchestrator = sagaOrchestrator;
     }
 
     @Operation(summary = "Obtener cuenta por ID")
@@ -56,14 +59,44 @@ public class CoreController {
         return ResponseEntity.ok(bancoService.ejecutarRetiro(cuentaId, monto, canal));
     }
 
-    @Operation(summary = "Ejecutar transferencia")
+    @Operation(summary = "Ejecutar transferencia mediante patrón SAGA y mensajería JMS")
     @PostMapping("/operaciones/transferencia")
-    public ResponseEntity<Map<String, String>> ejecutarTransferencia(@RequestBody Map<String, Object> req) {
+    public ResponseEntity<Map<String, Object>> ejecutarTransferencia(@RequestBody Map<String, Object> req) {
         Long origen = Long.parseLong(req.get("cuentaOrigenId").toString());
         Long destino = Long.parseLong(req.get("cuentaDestinoId").toString());
         Long monto = Long.parseLong(req.get("monto").toString());
         String comentario = req.getOrDefault("comentario", "").toString();
-        bancoService.ejecutarTransferencia(origen, destino, monto, comentario);
-        return ResponseEntity.ok(Map.of("mensaje", "Transferencia procesada exitosamente"));
+        String canal = req.getOrDefault("canal", "MOVIL").toString();
+
+        cl.duoc.bancoxyz.core.saga.model.RegistroSaga saga = sagaOrchestrator.iniciarTransferenciaSaga(
+                origen, destino, monto, comentario, canal
+        );
+
+        return ResponseEntity.ok(Map.of(
+                "mensaje", "Transferencia iniciada exitosamente bajo arquitectura SAGA asíncrona JMS",
+                "sagaId", saga.getSagaId(),
+                "estado", saga.getEstado().name(),
+                "cuentaOrigenId", saga.getCuentaOrigenId(),
+                "cuentaDestinoId", saga.getCuentaDestinoId(),
+                "monto", saga.getMonto()
+        ));
+    }
+
+    @Operation(summary = "Consultar estado de una transacción SAGA")
+    @GetMapping("/saga/transacciones/{sagaId}")
+    public ResponseEntity<cl.duoc.bancoxyz.core.saga.model.RegistroSaga> obtenerEstadoSaga(@PathVariable String sagaId) {
+        return ResponseEntity.ok(sagaOrchestrator.obtenerEstadoSaga(sagaId));
+    }
+
+    @Operation(summary = "Listar todas las transacciones SAGA")
+    @GetMapping("/saga/transacciones")
+    public ResponseEntity<List<cl.duoc.bancoxyz.core.saga.model.RegistroSaga>> listarTransaccionesSaga() {
+        return ResponseEntity.ok(sagaOrchestrator.obtenerTodasLasSagas());
+    }
+
+    @Operation(summary = "Listar eventos auditados transmitidos por JMS")
+    @GetMapping("/saga/auditoria")
+    public ResponseEntity<List<cl.duoc.bancoxyz.core.saga.event.AuditoriaEventoDto>> listarEventosAuditoria() {
+        return ResponseEntity.ok(sagaOrchestrator.obtenerEventosAuditoria());
     }
 }
