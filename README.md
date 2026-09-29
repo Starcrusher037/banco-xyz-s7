@@ -2,7 +2,6 @@
 ### Asignatura: Desarrollo Backend III (PBY2203) - Experiencia 3 / Semanas 6 y 7
 **Grupo:** Grupo 3  
 **Integrantes:** Leonardo Bustamante - Carolina Delgado Sapunar  
-**Repositorio GitHub:** [https://github.com/Lybern/Exp3_S6_Grupo3](https://github.com/Lybern/Exp3_S6_Grupo3)
 
 ---
 
